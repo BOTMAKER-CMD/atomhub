@@ -1,0 +1,273 @@
+--[[
+    ╔══════════════════════════════════════════════════════╗
+    ║ AVA • Atom Vanguard Array v4.2                       ║
+    ║ In-Game Panel • LocalScript                          ║
+    ║ Put in: StarterPlayerScripts                         ║
+    ╠══════════════════════════════════════════════════════╣
+    ║ CHAT COMMANDS:                                       ║
+    ║ /ava          — Staff task panel                     ║
+    ║ /order        — Client order status                  ║
+    ║ /ava help     — Show help                            ║
+    ╠══════════════════════════════════════════════════════╣
+    ║ REQUIRED BACKEND ENDPOINTS:                          ║
+    ║ GET  /me                  → General profile          ║
+    ║ GET  /staff/me            → Staff data + tasks       ║
+    ║ GET  /order/me            → Client orders            ║
+    ║ POST /complete            → Mark order as done       ║
+    ╚══════════════════════════════════════════════════════╝
+]]
+
+-- ═══════════════════════════════════════════════════════
+-- CONFIG
+-- ═══════════════════════════════════════════════════════
+local API_URL = "https://your-ava-api.railway.app"   -- ← CHANGE THIS
+
+-- Better security: Use Roblox Secrets (Creator Dashboard > Game Settings > Secrets)
+-- local API_KEY = HttpService:GetSecret("AVA_API_KEY")
+local API_KEY = "ava_super_secret_key_change_this"   -- fallback (change this!)
+
+-- ═══════════════════════════════════════════════════════
+-- SERVICES
+-- ═══════════════════════════════════════════════════════
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local gui = player:WaitForChild("PlayerGui")
+local robloxName = player.Name
+
+-- ═══════════════════════════════════════════════════════
+-- THEME (unchanged)
+-- ═══════════════════════════════════════════════════════
+local C = {
+    bg = Color3.fromRGB(18, 20, 24),
+    panel = Color3.fromRGB(24, 26, 31),
+    card = Color3.fromRGB(30, 33, 40),
+    cardAlt = Color3.fromRGB(24, 27, 34),
+    border = Color3.fromRGB(42, 46, 56),
+    accent = Color3.fromRGB(0, 255, 170),
+    accentDim = Color3.fromRGB(0, 190, 125),
+    red = Color3.fromRGB(255, 70, 70),
+    yellow = Color3.fromRGB(255, 200, 50),
+    blue = Color3.fromRGB(60, 165, 255),
+    green = Color3.fromRGB(55, 220, 110),
+    purple = Color3.fromRGB(160, 100, 255),
+    text = Color3.fromRGB(225, 228, 235),
+    muted = Color3.fromRGB(125, 130, 145),
+    white = Color3.fromRGB(255, 255, 255),
+    black = Color3.fromRGB(10, 10, 10),
+}
+
+local PRIORITY_C = { urgent = C.red, high = C.yellow, normal = C.blue, low = C.green }
+local DESIG_C = {
+    ["Developer & Owner"] = C.accent,
+    ["Server Owner"] = C.red,
+    ["AVA Admin"] = Color3.fromRGB(255, 155, 0),
+    ["Staff"] = C.blue,
+    ["Client"] = C.muted,
+}
+
+-- ═══════════════════════════════════════════════════════
+-- HTTP HELPERS
+-- ═══════════════════════════════════════════════════════
+local function apiGet(path)
+    local ok, res = pcall(HttpService.RequestAsync, HttpService, {
+        Url = API_URL .. path,
+        Method = "GET",
+        Headers = { ["Content-Type"] = "application/json", ["x-api-key"] = API_KEY },
+    })
+    if not ok then return nil, "Network error — check API_URL." end
+    if res.StatusCode == 403 then return nil, "Invalid API key or unauthorized." end
+    if res.StatusCode == 404 then return nil, "Not found." end
+    if res.StatusCode ~= 200 then return nil, "API error " .. res.StatusCode end
+
+    local d, e = pcall(HttpService.JSONDecode, HttpService, res.Body)
+    if not d then return nil, "JSON parse error." end
+    return d, nil
+end
+
+local function apiPost(path, body)
+    local ok, res = pcall(HttpService.RequestAsync, HttpService, {
+        Url = API_URL .. path,
+        Method = "POST",
+        Headers = { ["Content-Type"] = "application/json", ["x-api-key"] = API_KEY },
+        Body = HttpService:JSONEncode(body),
+    })
+    if not ok then return nil, "Network error." end
+    if res.StatusCode == 403 then return nil, "Permission denied." end
+    if res.StatusCode == 404 then return nil, "Not found." end
+    if res.StatusCode ~= 200 then return nil, "API error " .. res.StatusCode end
+
+    local d, e = pcall(HttpService.JSONDecode, HttpService, res.Body)
+    if not d then return nil, "JSON parse error." end
+    return d, nil
+end
+
+-- ═══════════════════════════════════════════════════════
+-- UI PRIMITIVES (corner, stroke, pad, vlist, hlist, lbl, btn, destroyGui, toast, createWindow)
+-- Paste all your original UI helper functions here — they are still fully supported.
+-- For brevity, I'm not repeating them, but keep them exactly as in your original script.
+-- (identityHeader, statRow, sectionHead, taskRow, orderRow, notRegisteredCard also stay the same)
+
+-- ═══════════════════════════════════════════════════════
+-- STAFF PANEL (/ava)
+-- ═══════════════════════════════════════════════════════
+local function openStaffPanel()
+    local _, _, body = createWindow("AVA_StaffPanel", 520, 660)
+    lbl(body, "⏳ Checking staff permissions...", 13, C.muted, false, Enum.TextXAlignment.Center).LayoutOrder = 1
+
+    task.spawn(function()
+        local data, err = apiGet("/staff/me?roblox_username=" .. HttpService:UrlEncode(robloxName))
+
+        -- Clear loader
+        for _, c in ipairs(body:GetChildren()) do
+            if c:IsA("TextLabel") then c:Destroy() end
+        end
+
+        if err then
+            lbl(body, "❌ " .. err, 13, C.red, false, Enum.TextXAlignment.Center).LayoutOrder = 1
+            return
+        end
+
+        if not data.registered or not data.is_staff then
+            notRegisteredCard(body, data.message or "You are not registered as AVA staff.", 1)
+            return
+        end
+
+        local P = data.profile
+        local S = data.summary
+        local T = data.tasks or {pending = {}, started = {}, finished = {}}
+
+        identityHeader(body, P, 1)
+        sectionHead(body, "📊 YOUR TASKS", C.muted, 3)
+        statRow(body, S, 4)
+
+        local lo = 10
+
+        if #T.pending > 0 then
+            sectionHead(body, "⏳ PENDING (" .. #T.pending .. ")", C.yellow, lo); lo += 1
+            for _, t in ipairs(T.pending) do
+                taskRow(body, t, lo, function(otp)
+                    toast("⏳ Completing " .. otp .. "...", false)
+                    task.spawn(function()
+                        local r, e = apiPost("/complete", {
+                            otp = otp,
+                            roblox_username = robloxName
+                        })
+                        if e then toast("❌ " .. e, true)
+                        elseif not r.success then toast("⚠️ " .. (r.message or "Error"), true)
+                        else toast("✅ " .. otp .. " completed!", false); task.delay(0.6, openStaffPanel) end
+                    end)
+                end)
+                lo += 1
+            end
+        end
+
+        if #T.started > 0 then
+            sectionHead(body, "▶️ IN PROGRESS (" .. #T.started .. ")", C.blue, lo); lo += 1
+            for _, t in ipairs(T.started) do
+                taskRow(body, t, lo, function(otp)
+                    toast("⏳ Completing " .. otp .. "...", false)
+                    task.spawn(function()
+                        local r, e = apiPost("/complete", {
+                            otp = otp,
+                            roblox_username = robloxName
+                        })
+                        if e then toast("❌ " .. e, true)
+                        elseif not r.success then toast("⚠️ " .. (r.message or "Error"), true)
+                        else toast("✅ " .. otp .. " completed!", false); task.delay(0.6, openStaffPanel) end
+                    end)
+                end)
+                lo += 1
+            end
+        end
+
+        if #T.finished > 0 then
+            sectionHead(body, "✅ RECENTLY FINISHED", C.accent, lo); lo += 1
+            for _, t in ipairs(T.finished) do
+                taskRow(body, t, lo, function() end)
+                lo += 1
+            end
+        end
+
+        if S.total == 0 then
+            lbl(body, "🎉 No tasks assigned to you right now.", 14, C.muted, false, Enum.TextXAlignment.Center).LayoutOrder = lo
+        end
+
+        local rb = btn(body, "🔄 Refresh Panel", C.cardAlt, C.accent, openStaffPanel)
+        rb.LayoutOrder = 999; stroke(rb, C.accent, 1)
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════
+-- CLIENT PANEL (/order)
+-- ═══════════════════════════════════════════════════════
+local function openOrderPanel()
+    local _, _, body = createWindow("AVA_OrderPanel", 470, 580)
+    lbl(body, "⏳ Looking up your orders...", 13, C.muted, false, Enum.TextXAlignment.Center).LayoutOrder = 1
+
+    task.spawn(function()
+        local data, err = apiGet("/order/me?roblox_username=" .. HttpService:UrlEncode(robloxName))
+
+        for _, c in ipairs(body:GetChildren()) do
+            if c:IsA("TextLabel") then c:Destroy() end
+        end
+
+        if err then
+            lbl(body, "❌ " .. err, 13, C.red, false, Enum.TextXAlignment.Center).LayoutOrder = 1
+            return
+        end
+
+        if not data.registered then
+            notRegisteredCard(body, data.message or "Account not found.", 1)
+            return
+        end
+
+        local P = data.profile
+        identityHeader(body, P, 1)
+        sectionHead(body, "📦 YOUR ORDERS", C.muted, 3)
+
+        local srow = Instance.new("Frame"); srow.BackgroundTransparency = 1
+        srow.Size = UDim2.new(1,0,0,72); srow.LayoutOrder = 4; srow.Parent = body; hlist(srow,8)
+
+        local function osc(val, label, col)
+            local c = Instance.new("Frame"); c.BackgroundColor3 = C.card
+            c.Size = UDim2.new(0.48,0,1,0); corner(c,10); stroke(c,col,1); c.Parent = srow
+            local vl = Instance.new("TextLabel"); vl.Text = tostring(val or 0); vl.TextSize = 24
+            vl.Font = Enum.Font.GothamBold; vl.TextColor3 = col; vl.BackgroundTransparency = 1
+            vl.Size = UDim2.new(1,0,0,35); vl.Position = UDim2.new(0,0,0,6); vl.TextXAlignment = Enum.TextXAlignment.Center; vl.Parent = c
+            local nl = Instance.new("TextLabel"); nl.Text = label; nl.TextSize = 10
+            nl.Font = Enum.Font.Gotham; nl.TextColor3 = C.muted; nl.BackgroundTransparency = 1
+            nl.Size = UDim2.new(1,0,0,16); nl.Position = UDim2.new(0,0,0,42); nl.TextXAlignment = Enum.TextXAlignment.Center; nl.Parent = c
+        end
+
+        osc(data.total_active or 0, "ACTIVE", C.yellow)
+        osc(data.total_finished or 0, "COMPLETED", C.accent)
+
+        if # (data.active_services or {}) > 0 then
+            sectionHead(body, "🛒 ACTIVE SERVICES", C.yellow, 10)
+            for i, svc in ipairs(data.active_services) do
+                orderRow(body, svc, 10 + i)
+            end
+        else
+            lbl(body, "✅ No active orders right now!", 14, C.muted, false, Enum.TextXAlignment.Center).LayoutOrder = 11
+        end
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════
+-- CHAT COMMANDS
+-- ═══════════════════════════════════════════════════════
+player.Chatted:Connect(function(msg)
+    local m = msg:lower():match("^%s*(.-)%s*$")
+    if m == "/ava" then openStaffPanel()
+    elseif m == "/order" then openOrderPanel()
+    elseif m == "/ava help" then toast("💬 /ava = staff panel | /order = client orders", false)
+    end
+end)
+
+task.delay(4, function()
+    toast("💬 Type /ava (staff) or /order (clients) to open AVA", false)
+end)
