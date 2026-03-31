@@ -20,11 +20,11 @@
 -- ═══════════════════════════════════════════════════════
 -- CONFIG
 -- ═══════════════════════════════════════════════════════
-local API_URL = "https://your-ava-api.railway.app"   -- ← CHANGE THIS
+local API_URL = "https://ava-e9cf.onrender.com"   -- ← CHANGE THIS
 
 -- Better security: Use Roblox Secrets (Creator Dashboard > Game Settings > Secrets)
 -- local API_KEY = HttpService:GetSecret("AVA_API_KEY")
-local API_KEY = "ava_super_secret_key_change_this"   -- fallback (change this!)
+local API_KEY = "TONY13356"   -- fallback (change this!)
 
 -- ═══════════════════════════════════════════════════════
 -- SERVICES
