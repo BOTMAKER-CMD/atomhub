@@ -1,273 +1,1497 @@
---[[
-    ╔══════════════════════════════════════════════════════╗
-    ║ AVA • Atom Vanguard Array v4.2                       ║
-    ║ In-Game Panel • LocalScript                          ║
-    ║ Put in: StarterPlayerScripts                         ║
-    ╠══════════════════════════════════════════════════════╣
-    ║ CHAT COMMANDS:                                       ║
-    ║ /ava          — Staff task panel                     ║
-    ║ /order        — Client order status                  ║
-    ║ /ava help     — Show help                            ║
-    ╠══════════════════════════════════════════════════════╣
-    ║ REQUIRED BACKEND ENDPOINTS:                          ║
-    ║ GET  /me                  → General profile          ║
-    ║ GET  /staff/me            → Staff data + tasks       ║
-    ║ GET  /order/me            → Client orders            ║
-    ║ POST /complete            → Mark order as done       ║
-    ╚══════════════════════════════════════════════════════╝
-]]
+-- ════════════════════════════════════════════════════════
+--  CONFIG  
+-- ════════════════════════════════════════════════════════
+local API_URL        = "https://ava-e9cf.onrender.com"
+local PANEL_API_KEY  = "CAPTAINTONY"   
+local INTRO_VIDEO_ID = "rbxassetid://YOUR_VIDEO_ASSET_ID"
 
--- ═══════════════════════════════════════════════════════
--- CONFIG
--- ═══════════════════════════════════════════════════════
-local API_URL = "https://ava-e9cf.onrender.com"   -- ← CHANGE THIS
-
--- Better security: Use Roblox Secrets (Creator Dashboard > Game Settings > Secrets)
--- local API_KEY = HttpService:GetSecret("AVA_API_KEY")
-local API_KEY = "TONY13356"   -- fallback (change this!)
-
--- ═══════════════════════════════════════════════════════
--- SERVICES
--- ═══════════════════════════════════════════════════════
-local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
-local HttpService = game:GetService("HttpService")
+-- ════════════════════════════════════════════════════════
+--  SERVICES
+-- ════════════════════════════════════════════════════════
+local Players          = game:GetService("Players")
+local TweenService     = game:GetService("TweenService")
+local HttpService      = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
+local RunService       = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local gui = player:WaitForChild("PlayerGui")
-local robloxName = player.Name
+local pgui   = player:WaitForChild("PlayerGui")
 
--- ═══════════════════════════════════════════════════════
--- THEME (unchanged)
--- ═══════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════════
+--  THEME
+-- ════════════════════════════════════════════════════════
 local C = {
-    bg = Color3.fromRGB(18, 20, 24),
-    panel = Color3.fromRGB(24, 26, 31),
-    card = Color3.fromRGB(30, 33, 40),
-    cardAlt = Color3.fromRGB(24, 27, 34),
-    border = Color3.fromRGB(42, 46, 56),
-    accent = Color3.fromRGB(0, 255, 170),
-    accentDim = Color3.fromRGB(0, 190, 125),
-    red = Color3.fromRGB(255, 70, 70),
-    yellow = Color3.fromRGB(255, 200, 50),
-    blue = Color3.fromRGB(60, 165, 255),
-    green = Color3.fromRGB(55, 220, 110),
-    purple = Color3.fromRGB(160, 100, 255),
-    text = Color3.fromRGB(225, 228, 235),
-    muted = Color3.fromRGB(125, 130, 145),
-    white = Color3.fromRGB(255, 255, 255),
-    black = Color3.fromRGB(10, 10, 10),
+    bg        = Color3.fromRGB(10, 12, 16),
+    panel     = Color3.fromRGB(16, 19, 25),
+    card      = Color3.fromRGB(22, 26, 34),
+    cardAlt   = Color3.fromRGB(18, 21, 28),
+    border    = Color3.fromRGB(35, 40, 52),
+    accent    = Color3.fromRGB(0,  255, 170),
+    accentDim = Color3.fromRGB(0,  185, 120),
+    red       = Color3.fromRGB(255, 65,  65),
+    yellow    = Color3.fromRGB(255, 210, 50),
+    blue      = Color3.fromRGB(55,  160, 255),
+    green     = Color3.fromRGB(50,  225, 105),
+    orange    = Color3.fromRGB(255, 155, 40),
+    purple    = Color3.fromRGB(160, 100, 255),
+    text      = Color3.fromRGB(220, 224, 232),
+    muted     = Color3.fromRGB(110, 118, 135),
+    white     = Color3.fromRGB(255, 255, 255),
+    black     = Color3.fromRGB(8,   8,   8),
+    input_bg  = Color3.fromRGB(26,  30,  40),
+    skeleton  = Color3.fromRGB(28,  32,  42),
 }
-
-local PRIORITY_C = { urgent = C.red, high = C.yellow, normal = C.blue, low = C.green }
+local PRIORITY_C = { urgent=C.red, high=C.yellow, normal=C.blue, low=C.green }
+local STATUS_C   = { pending=C.yellow, started=C.blue, finished=C.accent, cancelled=C.red }
+local STATUS_I   = { pending="⏳  PENDING", started="▶️  IN PROGRESS", finished="✅  DONE", cancelled="❌  CANCELLED" }
 local DESIG_C = {
     ["Developer & Owner"] = C.accent,
-    ["Server Owner"] = C.red,
-    ["AVA Admin"] = Color3.fromRGB(255, 155, 0),
-    ["Staff"] = C.blue,
-    ["Client"] = C.muted,
+    ["Server Owner"]      = C.red,
+    ["AVA Admin"]         = C.orange,
+    ["Staff"]             = C.blue,
+    ["Client"]            = C.muted,
 }
 
--- ═══════════════════════════════════════════════════════
--- HTTP HELPERS
--- ═══════════════════════════════════════════════════════
-local function apiGet(path)
-    local ok, res = pcall(HttpService.RequestAsync, HttpService, {
-        Url = API_URL .. path,
-        Method = "GET",
-        Headers = { ["Content-Type"] = "application/json", ["x-api-key"] = API_KEY },
-    })
-    if not ok then return nil, "Network error — check API_URL." end
-    if res.StatusCode == 403 then return nil, "Invalid API key or unauthorized." end
-    if res.StatusCode == 404 then return nil, "Not found." end
-    if res.StatusCode ~= 200 then return nil, "API error " .. res.StatusCode end
+-- ════════════════════════════════════════════════════════
+--  SESSION STATE
+-- ════════════════════════════════════════════════════════
+local State = {
+    token           = nil,
+    primary_profile = nil,
+    guilds          = {},
+    active_guild    = nil,
+    panel_data      = nil,
+}
 
-    local d, e = pcall(HttpService.JSONDecode, HttpService, res.Body)
-    if not d then return nil, "JSON parse error." end
-    return d, nil
+-- Session persistence keys stored as PlayerGui attributes
+local ATTR_TOKEN   = "AVA_SessionToken"
+local ATTR_DISCORD = "AVA_DiscordId"
+
+local function saveSession(token, discordId)
+    pcall(function()
+        pgui:SetAttribute(ATTR_TOKEN,   token or "")
+        pgui:SetAttribute(ATTR_DISCORD, tostring(discordId or ""))
+    end)
 end
 
-local function apiPost(path, body)
-    local ok, res = pcall(HttpService.RequestAsync, HttpService, {
-        Url = API_URL .. path,
-        Method = "POST",
-        Headers = { ["Content-Type"] = "application/json", ["x-api-key"] = API_KEY },
-        Body = HttpService:JSONEncode(body),
-    })
-    if not ok then return nil, "Network error." end
-    if res.StatusCode == 403 then return nil, "Permission denied." end
-    if res.StatusCode == 404 then return nil, "Not found." end
-    if res.StatusCode ~= 200 then return nil, "API error " .. res.StatusCode end
-
-    local d, e = pcall(HttpService.JSONDecode, HttpService, res.Body)
-    if not d then return nil, "JSON parse error." end
-    return d, nil
+local function loadSession()
+    local ok,  token  = pcall(function() return pgui:GetAttribute(ATTR_TOKEN)   end)
+    local ok2, discId = pcall(function() return pgui:GetAttribute(ATTR_DISCORD) end)
+    if ok and ok2 and token and token ~= "" then
+        return token, tonumber(discId)
+    end
+    return nil, nil
 end
 
--- ═══════════════════════════════════════════════════════
--- UI PRIMITIVES (corner, stroke, pad, vlist, hlist, lbl, btn, destroyGui, toast, createWindow)
--- Paste all your original UI helper functions here — they are still fully supported.
--- For brevity, I'm not repeating them, but keep them exactly as in your original script.
--- (identityHeader, statRow, sectionHead, taskRow, orderRow, notRegisteredCard also stay the same)
+local function clearSession()
+    saveSession("", "")
+    State.token           = nil
+    State.primary_profile = nil
+    State.guilds          = {}
+    State.active_guild    = nil
+    State.panel_data      = nil
+end
 
--- ═══════════════════════════════════════════════════════
--- STAFF PANEL (/ava)
--- ═══════════════════════════════════════════════════════
-local function openStaffPanel()
-    local _, _, body = createWindow("AVA_StaffPanel", 520, 660)
-    lbl(body, "⏳ Checking staff permissions...", 13, C.muted, false, Enum.TextXAlignment.Center).LayoutOrder = 1
+-- ════════════════════════════════════════════════════════
+--  HTTP  (with retry)
+-- ════════════════════════════════════════════════════════
+local MAX_RETRIES  = 3
+local RETRY_DELAYS = {1, 2, 4}
+
+local function apiCall(method, path, body, skipKey)
+    local headers = { ["Content-Type"] = "application/json" }
+    if not skipKey then
+        headers["x-api-key"] = PANEL_API_KEY
+    end
+    if State.token then
+        headers["x-session-token"] = State.token
+    end
+
+    local attempt = 0
+    while attempt < MAX_RETRIES do
+        attempt = attempt + 1
+        local ok, res = pcall(HttpService.RequestAsync, HttpService, {
+            Url     = API_URL .. path,
+            Method  = method,
+            Headers = headers,
+            Body    = body and HttpService:JSONEncode(body) or nil,
+        })
+
+        if not ok then
+            if attempt < MAX_RETRIES then
+                task.wait(RETRY_DELAYS[attempt])
+                continue
+            end
+            return nil, "Network error — check your connection. (tried " .. MAX_RETRIES .. "x)"
+        end
+
+        local decode_ok, data = pcall(HttpService.JSONDecode, HttpService, res.Body)
+        if not decode_ok then
+            return nil, "Server returned invalid response."
+        end
+
+        if res.StatusCode == 401 then
+            clearSession()
+            return nil, data.detail or "Session expired. Please log in again."
+        end
+        if res.StatusCode == 429 then
+            return nil, data.detail or "Too many attempts. Please wait before trying again."
+        end
+        if res.StatusCode == 403 then return nil, data.detail or "Access denied."    end
+        if res.StatusCode == 404 then return nil, data.detail or "Not found."        end
+        if res.StatusCode == 400 then return nil, data.detail or "Invalid request."  end
+
+        if res.StatusCode >= 500 then
+            if attempt < MAX_RETRIES then
+                task.wait(RETRY_DELAYS[attempt])
+                continue
+            end
+            return nil, data.detail or ("Server error " .. res.StatusCode .. " after " .. MAX_RETRIES .. " tries.")
+        end
+
+        if res.StatusCode ~= 200 and res.StatusCode ~= 201 then
+            return nil, data.detail or ("Unexpected status " .. res.StatusCode)
+        end
+
+        return data, nil
+    end
+    return nil, "Request failed after all retries."
+end
+
+local function GET(path)     return apiCall("GET",  path, nil) end
+local function POST(path, b) return apiCall("POST", path, b)   end
+local function DEL(path)     return apiCall("DELETE", path, nil) end
+
+-- ════════════════════════════════════════════════════════
+--  UI PRIMITIVES
+-- ════════════════════════════════════════════════════════
+local function kill(name)
+    local e = pgui:FindFirstChild(name)
+    if e then e:Destroy() end
+end
+
+local function corner(p, r)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, r or 8)
+    c.Parent = p
+    return c
+end
+
+local function stroke(p, col, t)
+    local s = Instance.new("UIStroke")
+    s.Color = col or C.accent
+    s.Thickness = t or 1
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    s.Parent = p
+    return s
+end
+
+local function pad(p, px, py)
+    local u = Instance.new("UIPadding")
+    u.PaddingTop    = UDim.new(0, py or px)
+    u.PaddingBottom = UDim.new(0, py or px)
+    u.PaddingLeft   = UDim.new(0, px)
+    u.PaddingRight  = UDim.new(0, px)
+    u.Parent = p
+end
+
+local function vlist(p, gap)
+    local l = Instance.new("UIListLayout")
+    l.SortOrder = Enum.SortOrder.LayoutOrder
+    l.Padding = UDim.new(0, gap or 8)
+    l.Parent = p
+    return l
+end
+
+local function hlist(p, gap)
+    local l = Instance.new("UIListLayout")
+    l.SortOrder = Enum.SortOrder.LayoutOrder
+    l.FillDirection = Enum.FillDirection.Horizontal
+    l.Padding = UDim.new(0, gap or 8)
+    l.Parent = p
+    return l
+end
+
+local function lbl(parent, text, size, color, bold, xa, lo)
+    local l = Instance.new("TextLabel")
+    l.Text = text or ""
+    l.TextSize = size or 14
+    l.TextColor3 = color or C.text
+    l.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
+    l.BackgroundTransparency = 1
+    l.TextWrapped = true
+    l.AutomaticSize = Enum.AutomaticSize.Y
+    l.Size = UDim2.new(1, 0, 0, 0)
+    l.TextXAlignment = xa or Enum.TextXAlignment.Left
+    if lo then l.LayoutOrder = lo end
+    l.Parent = parent
+    return l
+end
+
+local function divider(parent, lo)
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(1, 0, 0, 1)
+    f.BackgroundColor3 = C.border
+    f.BorderSizePixel = 0
+    if lo then f.LayoutOrder = lo end
+    f.Parent = parent
+    return f
+end
+
+local function skeleton(parent, h, lo)
+    local f = Instance.new("Frame")
+    f.BackgroundColor3 = C.skeleton
+    f.Size = UDim2.new(1, 0, 0, h or 20)
+    if lo then f.LayoutOrder = lo end
+    f.Parent = parent
+    corner(f, 6)
+    local shimmer = Instance.new("Frame")
+    shimmer.BackgroundColor3 = Color3.fromRGB(40, 46, 60)
+    shimmer.Size = UDim2.new(0.3, 0, 1, 0)
+    shimmer.Position = UDim2.new(-0.3, 0, 0, 0)
+    shimmer.BorderSizePixel = 0
+    shimmer.Parent = f
+    TweenService:Create(shimmer, TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1),
+        {Position = UDim2.new(1, 0, 0, 0)}):Play()
+    return f
+end
+
+-- ════════════════════════════════════════════════════════
+--  BUTTONS
+-- ════════════════════════════════════════════════════════
+local function mkBtn(parent, text, bg, tc, cb, lo, h)
+    local b = Instance.new("TextButton")
+    b.Text = text
+    b.TextSize = 13
+    b.Font = Enum.Font.GothamBold
+    b.TextColor3 = tc or C.black
+    b.BackgroundColor3 = bg or C.accent
+    b.AutoButtonColor = false
+    b.Size = UDim2.new(1, 0, 0, h or 40)
+    if lo then b.LayoutOrder = lo end
+    b.Parent = parent
+    corner(b, 8)
+
+    b.MouseEnter:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.1),
+            {BackgroundColor3 = (bg or C.accent):Lerp(C.white, 0.12)}):Play()
+    end)
+    b.MouseLeave:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.1), {BackgroundColor3 = bg or C.accent}):Play()
+    end)
+    b.MouseButton1Click:Connect(cb)
+    return b
+end
+
+local function mkSmallBtn(parent, text, bg, tc, cb, lo)
+    return mkBtn(parent, text, bg, tc, cb, lo, 30)
+end
+
+-- ════════════════════════════════════════════════════════
+--  TOAST
+-- ════════════════════════════════════════════════════════
+local function toast(msg, isErr, duration)
+    kill("AVA_Toast")
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "AVA_Toast"
+    sg.ResetOnSpawn = false
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    sg.Parent = pgui
+
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(0, 420, 0, 50)
+    f.Position = UDim2.new(0.5, -210, 1, 10)
+    f.BackgroundColor3 = isErr and C.red or C.accent
+    f.Parent = sg
+    corner(f, 10)
+
+    local l = Instance.new("TextLabel")
+    l.Text = "  " .. msg
+    l.TextSize = 13
+    l.Font = Enum.Font.GothamBold
+    l.TextColor3 = C.black
+    l.BackgroundTransparency = 1
+    l.Size = UDim2.new(1, -10, 1, 0)
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.TextWrapped = true
+    l.Parent = f
+
+    TweenService:Create(f, TweenInfo.new(0.25, Enum.EasingStyle.Quart),
+        {Position = UDim2.new(0.5, -210, 1, -65)}):Play()
+    task.delay(duration or 3.5, function()
+        TweenService:Create(f, TweenInfo.new(0.2),
+            {Position = UDim2.new(0.5, -210, 1, 10)}):Play()
+        task.delay(0.25, function() sg:Destroy() end)
+    end)
+end
+
+-- ════════════════════════════════════════════════════════
+--  BASE SCREEN
+-- ════════════════════════════════════════════════════════
+local function makeScreen(name)
+    kill(name)
+    local sg = Instance.new("ScreenGui")
+    sg.Name = name
+    sg.ResetOnSpawn = false
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    sg.IgnoreGuiInset = true
+    sg.Parent = pgui
+    return sg
+end
+
+-- ════════════════════════════════════════════════════════
+--  SCROLLABLE WINDOW
+-- ════════════════════════════════════════════════════════
+local function scrollWindow(sg, w, h, title, subtitle, onClose)
+    local dim = Instance.new("Frame")
+    dim.Size = UDim2.new(1, 0, 1, 0)
+    dim.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    dim.BackgroundTransparency = 0.45
+    dim.Parent = sg
+
+    local win = Instance.new("Frame")
+    win.Size = UDim2.new(0, w, 0, h)
+    win.Position = UDim2.new(0.5, -w/2, 0.5, -h/2)
+    win.BackgroundColor3 = C.bg
+    win.BackgroundTransparency = 1
+    win.Parent = sg
+    corner(win, 14)
+    stroke(win, C.border, 1.5)
+
+    TweenService:Create(win,
+        TweenInfo.new(0.22, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
+        {BackgroundTransparency = 0}):Play()
+
+    local hdr = Instance.new("Frame")
+    hdr.Size = UDim2.new(1, 0, 0, 58)
+    hdr.BackgroundColor3 = C.panel
+    hdr.Parent = win
+    corner(hdr, 14)
+    local hfix = Instance.new("Frame")
+    hfix.Size = UDim2.new(1, 0, 0, 18)
+    hfix.Position = UDim2.new(0, 0, 1, -18)
+    hfix.BackgroundColor3 = C.panel
+    hfix.BorderSizePixel = 0
+    hfix.Parent = hdr
+
+    local tl = Instance.new("TextLabel")
+    tl.Text = title
+    tl.TextSize = 16
+    tl.Font = Enum.Font.GothamBold
+    tl.TextColor3 = C.accent
+    tl.BackgroundTransparency = 1
+    tl.Size = UDim2.new(1, -52, 0, 24)
+    tl.Position = UDim2.new(0, 14, 0, 7)
+    tl.TextXAlignment = Enum.TextXAlignment.Left
+    tl.Parent = hdr
+
+    if subtitle then
+        local sl = Instance.new("TextLabel")
+        sl.Text = subtitle
+        sl.TextSize = 10
+        sl.Font = Enum.Font.Gotham
+        sl.TextColor3 = C.muted
+        sl.BackgroundTransparency = 1
+        sl.Size = UDim2.new(1, -52, 0, 14)
+        sl.Position = UDim2.new(0, 14, 0, 34)
+        sl.TextXAlignment = Enum.TextXAlignment.Left
+        sl.Parent = hdr
+    end
+
+    -- FIX #5 / #7: Always create close button; onClose always destroys sg
+    local cb = Instance.new("TextButton")
+    cb.Text = "✕"
+    cb.TextSize = 15
+    cb.Font = Enum.Font.GothamBold
+    cb.TextColor3 = C.muted
+    cb.BackgroundTransparency = 1
+    cb.Size = UDim2.new(0, 34, 0, 34)
+    cb.Position = UDim2.new(1, -40, 0, 12)
+    cb.Parent = hdr
+    cb.MouseButton1Click:Connect(function()
+        TweenService:Create(win, TweenInfo.new(0.15),
+            {BackgroundTransparency = 1}):Play()
+        task.delay(0.18, function()
+            sg:Destroy()  -- always destroy the ScreenGui
+        end)
+        if onClose then onClose() end
+    end)
+
+    -- drag
+    local drag, ds, sp = false, nil, nil
+    hdr.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            drag = true; ds = i.Position; sp = win.Position
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if drag and i.UserInputType == Enum.UserInputType.MouseMovement then
+            local d = i.Position - ds
+            win.Position = UDim2.new(sp.X.Scale, sp.X.Offset+d.X, sp.Y.Scale, sp.Y.Offset+d.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end
+    end)
+
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Size = UDim2.new(1, 0, 1, -62)
+    scroll.Position = UDim2.new(0, 0, 0, 62)
+    scroll.BackgroundTransparency = 1
+    scroll.ScrollBarThickness = 3
+    scroll.ScrollBarImageColor3 = C.accent
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.Parent = win
+
+    local body = Instance.new("Frame")
+    body.Size = UDim2.new(1, 0, 0, 0)
+    body.BackgroundTransparency = 1
+    body.AutomaticSize = Enum.AutomaticSize.Y
+    body.Parent = scroll
+    pad(body, 14, 10)
+    vlist(body, 10)
+
+    return win, body
+end
+
+-- ════════════════════════════════════════════════════════
+--  IDENTITY CARD
+-- ════════════════════════════════════════════════════════
+local function identCard(body, profile, lo)
+    local card = Instance.new("Frame")
+    card.BackgroundColor3 = C.panel
+    card.Size = UDim2.new(1, 0, 0, 0)
+    card.AutomaticSize = Enum.AutomaticSize.Y
+    card.LayoutOrder = lo or 0
+    card.Parent = body
+    corner(card, 12)
+    stroke(card, C.accent, 1.5)
+    pad(card, 14, 12)
+
+    local inner = Instance.new("Frame")
+    inner.BackgroundTransparency = 1
+    inner.Size = UDim2.new(1, 0, 0, 0)
+    inner.AutomaticSize = Enum.AutomaticSize.Y
+    inner.Parent = card
+    vlist(inner, 4)
+
+    local sr = Instance.new("Frame")
+    sr.BackgroundTransparency = 1
+    sr.Size = UDim2.new(1, 0, 0, 18)
+    sr.LayoutOrder = 1
+    sr.Parent = inner
+    local dot = Instance.new("Frame")
+    dot.Size = UDim2.new(0, 7, 0, 7)
+    dot.Position = UDim2.new(0, 0, 0.5, -3.5)
+    dot.BackgroundColor3 = C.accent
+    dot.Parent = sr
+    corner(dot, 99)
+    local sl = Instance.new("TextLabel")
+    sl.Text = (profile.server_name or "AVA SERVICES"):upper()
+    sl.TextSize = 10
+    sl.Font = Enum.Font.GothamBold
+    sl.TextColor3 = C.accent
+    sl.BackgroundTransparency = 1
+    sl.Size = UDim2.new(1, -13, 1, 0)
+    sl.Position = UDim2.new(0, 13, 0, 0)
+    sl.TextXAlignment = Enum.TextXAlignment.Left
+    sl.Parent = sr
+
+    divider(inner, 2)
+
+    lbl(inner, profile.display_name or profile.roblox_username or "", 22, C.text, true, nil, 3)
+
+    local dc = DESIG_C[profile.designation] or C.blue
+    local dr = Instance.new("Frame")
+    dr.BackgroundTransparency = 1
+    dr.Size = UDim2.new(1, 0, 0, 22)
+    dr.LayoutOrder = 4
+    dr.Parent = inner
+    local db = Instance.new("TextLabel")
+    db.Text = "  " .. (profile.designation or "Staff") .. "  "
+    db.TextSize = 11
+    db.Font = Enum.Font.GothamBold
+    db.TextColor3 = C.black
+    db.BackgroundColor3 = dc
+    db.AutomaticSize = Enum.AutomaticSize.X
+    db.Size = UDim2.new(0, 0, 1, 0)
+    db.TextXAlignment = Enum.TextXAlignment.Center
+    db.Parent = dr
+    corner(db, 6)
+
+    lbl(inner, "@" .. (profile.roblox_username or ""), 11, C.muted, false, nil, 5)
+    if profile.guild_name and profile.guild_name ~= "" then
+        lbl(inner, "📡  " .. profile.guild_name, 10, C.muted, false, nil, 6)
+    end
+    return card
+end
+
+-- ════════════════════════════════════════════════════════
+--  STAT ROW
+-- ════════════════════════════════════════════════════════
+local function statRow(body, summary, lo)
+    local row = Instance.new("Frame")
+    row.BackgroundTransparency = 1
+    row.Size = UDim2.new(1, 0, 0, 72)
+    row.LayoutOrder = lo
+    row.Parent = body
+    hlist(row, 8)
+
+    local function sc(val, label, col)
+        local c = Instance.new("Frame")
+        c.BackgroundColor3 = C.card
+        c.Size = UDim2.new(0.313, 0, 1, 0)
+        corner(c, 10)
+        stroke(c, col, 1)
+        c.Parent = row
+
+        local vl = Instance.new("TextLabel")
+        vl.Text = tostring(val)
+        vl.TextSize = 24
+        vl.Font = Enum.Font.GothamBold
+        vl.TextColor3 = col
+        vl.BackgroundTransparency = 1
+        vl.Size = UDim2.new(1, 0, 0, 36)
+        vl.Position = UDim2.new(0, 0, 0, 6)
+        vl.TextXAlignment = Enum.TextXAlignment.Center
+        vl.Parent = c
+
+        local nl = Instance.new("TextLabel")
+        nl.Text = label
+        nl.TextSize = 9
+        nl.Font = Enum.Font.GothamBold
+        nl.TextColor3 = C.muted
+        nl.BackgroundTransparency = 1
+        nl.Size = UDim2.new(1, 0, 0, 14)
+        nl.Position = UDim2.new(0, 0, 0, 44)
+        nl.TextXAlignment = Enum.TextXAlignment.Center
+        nl.Parent = c
+    end
+
+    sc(summary.total     or 0, "TOTAL",     C.text)
+    sc(summary.remaining or 0, "REMAINING", C.yellow)
+    sc(summary.completed or 0, "COMPLETED", C.accent)
+end
+
+-- ════════════════════════════════════════════════════════
+--  SECTION HEADER
+-- ════════════════════════════════════════════════════════
+local function secHead(body, text, col, lo)
+    local f = Instance.new("Frame")
+    f.BackgroundTransparency = 1
+    f.Size = UDim2.new(1, 0, 0, 20)
+    f.LayoutOrder = lo
+    f.Parent = body
+    local l = Instance.new("TextLabel")
+    l.Text = text
+    l.TextSize = 11
+    l.Font = Enum.Font.GothamBold
+    l.TextColor3 = col or C.muted
+    l.BackgroundTransparency = 1
+    l.Size = UDim2.new(1, 0, 1, 0)
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.Parent = f
+end
+
+-- ════════════════════════════════════════════════════════
+--  TASK CARD  (staff — with start + complete, notes, due, server tag)
+-- ════════════════════════════════════════════════════════
+local function taskCard(body, svc, lo, onAction, guild_id, isAdmin)
+    local row = Instance.new("Frame")
+    row.BackgroundColor3 = C.card
+    row.Size = UDim2.new(1, 0, 0, 0)
+    row.AutomaticSize = Enum.AutomaticSize.Y
+    row.LayoutOrder = lo
+    corner(row, 10)
+    row.Parent = body
+
+    local pc = PRIORITY_C[svc.priority] or C.blue
+    local bar = Instance.new("Frame")
+    bar.Size = UDim2.new(0, 3, 1, -16)
+    bar.Position = UDim2.new(0, 6, 0, 8)
+    bar.BackgroundColor3 = pc
+    bar.BorderSizePixel = 0
+    bar.Parent = row
+    corner(bar, 3)
+
+    local inner = Instance.new("Frame")
+    inner.BackgroundTransparency = 1
+    inner.Size = UDim2.new(1, -20, 0, 0)
+    inner.Position = UDim2.new(0, 16, 0, 0)
+    inner.AutomaticSize = Enum.AutomaticSize.Y
+    inner.Parent = row
+    pad(inner, 10)
+    vlist(inner, 5)
+
+    local tr = Instance.new("Frame")
+    tr.BackgroundTransparency = 1
+    tr.Size = UDim2.new(1, 0, 0, 22)
+    tr.LayoutOrder = 1
+    tr.Parent = inner
+
+    local ob = Instance.new("TextLabel")
+    ob.Text = "  " .. svc.otp
+    ob.TextSize = 11
+    ob.Font = Enum.Font.GothamBold
+    ob.TextColor3 = C.accent
+    ob.BackgroundColor3 = C.cardAlt
+    ob.Size = UDim2.new(0, 100, 1, 0)
+    ob.TextXAlignment = Enum.TextXAlignment.Left
+    corner(ob, 5)
+    ob.Parent = tr
+
+    local pb = Instance.new("TextLabel")
+    pb.Text = (svc.priority or "normal"):upper()
+    pb.TextSize = 9
+    pb.Font = Enum.Font.GothamBold
+    pb.TextColor3 = C.black
+    pb.BackgroundColor3 = pc
+    pb.Size = UDim2.new(0, 64, 1, 0)
+    pb.Position = UDim2.new(1, -64, 0, 0)
+    pb.TextXAlignment = Enum.TextXAlignment.Center
+    corner(pb, 5)
+    pb.Parent = tr
+
+    lbl(inner, svc.name, 14, C.text, true, nil, 2)
+    lbl(inner, "💎  " .. svc.value .. "    👤  " .. (svc.roblox_username ~= "" and "@" .. svc.roblox_username or "—"), 12, C.muted, false, nil, 3)
+    lbl(inner, STATUS_I[svc.status] or svc.status:upper(), 12, STATUS_C[svc.status] or C.muted, false, nil, 4)
+
+    -- FIX #10: inline svc.source_guild_name directly, removed unused local
+    if svc.source_guild_name and svc.source_guild_name ~= "" then
+        lbl(inner, "🌐  From: " .. svc.source_guild_name, 10, C.purple, false, nil, 5)
+    end
+
+    if svc.due_date then
+        lbl(inner, "📅  Due: " .. svc.due_date:sub(1, 10), 10, C.orange, false, nil, 6)
+    end
+
+    if svc.tags and #svc.tags > 0 then
+        local tagStr = table.concat(svc.tags, "  #")
+        lbl(inner, "#" .. tagStr, 10, C.muted, false, nil, 7)
+    end
+
+    if svc.notes and #svc.notes > 0 then
+        local latest = svc.notes[#svc.notes]
+        local noteFrame = Instance.new("Frame")
+        noteFrame.BackgroundColor3 = C.cardAlt
+        noteFrame.Size = UDim2.new(1, 0, 0, 0)
+        noteFrame.AutomaticSize = Enum.AutomaticSize.Y
+        noteFrame.LayoutOrder = 8
+        noteFrame.Parent = inner
+        corner(noteFrame, 6)
+        pad(noteFrame, 8, 6)
+        stroke(noteFrame, C.border, 1)
+        lbl(noteFrame, "📝  " .. latest.note, 11, C.muted)
+        if #svc.notes > 1 then
+            lbl(noteFrame, "+" .. (#svc.notes - 1) .. " more note(s)", 10, C.muted)
+        end
+    end
+
+    if svc.status == "pending" or svc.status == "started" then
+        local btnRow = Instance.new("Frame")
+        btnRow.BackgroundTransparency = 1
+        btnRow.Size = UDim2.new(1, 0, 0, 36)
+        btnRow.LayoutOrder = 9
+        btnRow.Parent = inner
+        hlist(btnRow, 8)
+
+        if svc.status == "pending" then
+            local startBtn = Instance.new("TextButton")
+            startBtn.Text = "▶  Start"
+            startBtn.TextSize = 12
+            startBtn.Font = Enum.Font.GothamBold
+            startBtn.TextColor3 = C.black
+            startBtn.BackgroundColor3 = C.blue
+            startBtn.AutoButtonColor = false
+            startBtn.Size = UDim2.new(0.48, 0, 1, 0)
+            corner(startBtn, 7)
+            startBtn.Parent = btnRow
+            startBtn.MouseButton1Click:Connect(function()
+                startBtn.Text = "⏳"
+                startBtn.Active = false
+                onAction("start", svc.otp, guild_id)
+            end)
+        end
+
+        local doneBtn = Instance.new("TextButton")
+        doneBtn.Text = "✅  Complete"
+        doneBtn.TextSize = 12
+        doneBtn.Font = Enum.Font.GothamBold
+        doneBtn.TextColor3 = C.black
+        doneBtn.BackgroundColor3 = C.accent
+        doneBtn.AutoButtonColor = false
+        doneBtn.Size = svc.status == "pending" and UDim2.new(0.48, 0, 1, 0) or UDim2.new(1, 0, 1, 0)
+        corner(doneBtn, 7)
+        doneBtn.Parent = btnRow
+        doneBtn.MouseButton1Click:Connect(function()
+            doneBtn.Text = "⏳"
+            doneBtn.Active = false
+            onAction("complete", svc.otp, guild_id)
+        end)
+    end
+end
+
+-- ════════════════════════════════════════════════════════
+--  ORDER CARD  (client view)
+-- ════════════════════════════════════════════════════════
+local function orderCard(body, svc, lo)
+    local row = Instance.new("Frame")
+    row.BackgroundColor3 = C.card
+    row.Size = UDim2.new(1, 0, 0, 0)
+    row.AutomaticSize = Enum.AutomaticSize.Y
+    row.LayoutOrder = lo
+    corner(row, 10)
+    row.Parent = body
+
+    local inner = Instance.new("Frame")
+    inner.BackgroundTransparency = 1
+    inner.Size = UDim2.new(1, 0, 0, 0)
+    inner.AutomaticSize = Enum.AutomaticSize.Y
+    inner.Parent = row
+    pad(inner, 12, 10)
+    vlist(inner, 5)
+
+    lbl(inner, "🔑  " .. svc.otp, 12, C.accent, true, nil, 1)
+    lbl(inner, svc.name, 15, C.text, true, nil, 2)
+    lbl(inner, "💎  Value: " .. svc.value, 12, C.muted, false, nil, 3)
+    lbl(inner, STATUS_I[svc.status] or svc.status:upper(), 12, STATUS_C[svc.status] or C.muted, true, nil, 4)
+    if svc.due_date then
+        lbl(inner, "📅  Due: " .. svc.due_date:sub(1, 10), 11, C.orange, false, nil, 5)
+    end
+end
+
+-- ════════════════════════════════════════════════════════
+--  CROSS-SERVER ASSIGN PANEL  (Admin+)
+-- ════════════════════════════════════════════════════════
+local function openAssignPanel(otp, homeGuildId, onDone)
+    local sg = makeScreen("AVA_AssignPanel")
+    -- FIX #7: onClose now destroys sg via scrollWindow's built-in close handler
+    local _, body = scrollWindow(sg, 480, 560,
+        "🌐  Assign Task — " .. otp,
+        "Select a staff member from any server",
+        function()
+            kill("AVA_AssignPanel")
+        end)
+
+    local spin  = skeleton(body, 24, 1)
+    local spin2 = skeleton(body, 60, 2)
 
     task.spawn(function()
-        local data, err = apiGet("/staff/me?roblox_username=" .. HttpService:UrlEncode(robloxName))
-
-        -- Clear loader
-        for _, c in ipairs(body:GetChildren()) do
-            if c:IsA("TextLabel") then c:Destroy() end
-        end
+        local data, err = GET("/panel/" .. homeGuildId .. "/crossstaff")
+        spin:Destroy()
+        spin2:Destroy()
 
         if err then
-            lbl(body, "❌ " .. err, 13, C.red, false, Enum.TextXAlignment.Center).LayoutOrder = 1
+            lbl(body, "❌  " .. err, 12, C.red, false, nil, 1)
             return
         end
 
-        if not data.registered or not data.is_staff then
-            notRegisteredCard(body, data.message or "You are not registered as AVA staff.", 1)
-            return
-        end
-
-        local P = data.profile
-        local S = data.summary
-        local T = data.tasks or {pending = {}, started = {}, finished = {}}
-
-        identityHeader(body, P, 1)
-        sectionHead(body, "📊 YOUR TASKS", C.muted, 3)
-        statRow(body, S, 4)
+        local totalStaff = data.total_staff or 0
+        lbl(body, totalStaff .. " staff across " .. #data.guilds .. " server(s)", 11, C.muted, false, nil, 1)
 
         local lo = 10
+        for _, guild in ipairs(data.guilds) do
+            secHead(body, "📡  " .. (guild.server_name or guild.guild_name or "Unknown"), C.accent, lo)
+            lo = lo + 1
 
-        if #T.pending > 0 then
-            sectionHead(body, "⏳ PENDING (" .. #T.pending .. ")", C.yellow, lo); lo += 1
-            for _, t in ipairs(T.pending) do
-                taskRow(body, t, lo, function(otp)
-                    toast("⏳ Completing " .. otp .. "...", false)
+            for _, staff in ipairs(guild.staff) do
+                local card = Instance.new("TextButton")
+                card.BackgroundColor3 = C.card
+                card.Size = UDim2.new(1, 0, 0, 0)
+                card.AutomaticSize = Enum.AutomaticSize.Y
+                card.LayoutOrder = lo
+                card.Text = ""
+                card.AutoButtonColor = false
+                corner(card, 8)
+                card.Parent = body
+                pad(card, 12, 8)
+
+                local row = Instance.new("Frame")
+                row.BackgroundTransparency = 1
+                row.Size = UDim2.new(1, 0, 0, 0)
+                row.AutomaticSize = Enum.AutomaticSize.Y
+                row.Parent = card
+
+                local dc = DESIG_C[staff.designation] or C.blue
+                lbl(row, staff.display_name or staff.roblox_username, 14, C.text, true)
+                lbl(row, staff.designation, 10, dc)
+                lbl(row, "@" .. staff.roblox_username, 10, C.muted)
+
+                card.MouseEnter:Connect(function()
+                    TweenService:Create(card, TweenInfo.new(0.1),
+                        {BackgroundColor3 = Color3.fromRGB(30, 35, 46)}):Play()
+                end)
+                card.MouseLeave:Connect(function()
+                    TweenService:Create(card, TweenInfo.new(0.1),
+                        {BackgroundColor3 = C.card}):Play()
+                end)
+
+                local capturedStaff = staff
+                local capturedGuild = guild
+                card.MouseButton1Click:Connect(function()
+                    card.BackgroundColor3 = C.accent
                     task.spawn(function()
-                        local r, e = apiPost("/complete", {
-                            otp = otp,
-                            roblox_username = robloxName
+                        local r, e = POST("/panel/" .. homeGuildId .. "/assign", {
+                            otp               = otp,
+                            target_discord_id = capturedStaff.discord_id,
+                            target_guild_id   = capturedGuild.guild_id,
                         })
-                        if e then toast("❌ " .. e, true)
-                        elseif not r.success then toast("⚠️ " .. (r.message or "Error"), true)
-                        else toast("✅ " .. otp .. " completed!", false); task.delay(0.6, openStaffPanel) end
+                        if e then
+                            toast("❌  " .. e, true)
+                            card.BackgroundColor3 = C.card
+                        else
+                            toast("✅  Assigned to " .. (capturedStaff.display_name or "staff"), false)
+                            sg:Destroy()
+                            if onDone then onDone() end
+                        end
                     end)
                 end)
-                lo += 1
+
+                lo = lo + 1
             end
         end
-
-        if #T.started > 0 then
-            sectionHead(body, "▶️ IN PROGRESS (" .. #T.started .. ")", C.blue, lo); lo += 1
-            for _, t in ipairs(T.started) do
-                taskRow(body, t, lo, function(otp)
-                    toast("⏳ Completing " .. otp .. "...", false)
-                    task.spawn(function()
-                        local r, e = apiPost("/complete", {
-                            otp = otp,
-                            roblox_username = robloxName
-                        })
-                        if e then toast("❌ " .. e, true)
-                        elseif not r.success then toast("⚠️ " .. (r.message or "Error"), true)
-                        else toast("✅ " .. otp .. " completed!", false); task.delay(0.6, openStaffPanel) end
-                    end)
-                end)
-                lo += 1
-            end
-        end
-
-        if #T.finished > 0 then
-            sectionHead(body, "✅ RECENTLY FINISHED", C.accent, lo); lo += 1
-            for _, t in ipairs(T.finished) do
-                taskRow(body, t, lo, function() end)
-                lo += 1
-            end
-        end
-
-        if S.total == 0 then
-            lbl(body, "🎉 No tasks assigned to you right now.", 14, C.muted, false, Enum.TextXAlignment.Center).LayoutOrder = lo
-        end
-
-        local rb = btn(body, "🔄 Refresh Panel", C.cardAlt, C.accent, openStaffPanel)
-        rb.LayoutOrder = 999; stroke(rb, C.accent, 1)
     end)
 end
 
--- ═══════════════════════════════════════════════════════
--- CLIENT PANEL (/order)
--- ═══════════════════════════════════════════════════════
-local function openOrderPanel()
-    local _, _, body = createWindow("AVA_OrderPanel", 470, 580)
-    lbl(body, "⏳ Looking up your orders...", 13, C.muted, false, Enum.TextXAlignment.Center).LayoutOrder = 1
+-- ════════════════════════════════════════════════════════
+--  PAGE 3: MAIN PANEL
+-- ════════════════════════════════════════════════════════
+local function openMainPanel(guild)
+    kill("AVA_MainPanel")
+    State.active_guild = guild
+
+    local sg = makeScreen("AVA_MainPanel")
+    local cfg_name = guild.server_name or guild.guild_name or "AVA Services"
+    -- FIX #8: onClose cleans up AVA_Running so panel can be reopened
+    local _, body = scrollWindow(sg, 540, 670,
+        "🛡️  " .. cfg_name,
+        (guild.designation or "Staff") .. " Panel",
+        function()
+            State.active_guild = nil
+            kill("AVA_Running")
+        end)
+
+    local sk1 = skeleton(body, 80, 1)
+    local sk2 = skeleton(body, 24, 2)
+    local sk3 = skeleton(body, 70, 3)
+    local sk4 = skeleton(body, 70, 4)
 
     task.spawn(function()
-        local data, err = apiGet("/order/me?roblox_username=" .. HttpService:UrlEncode(robloxName))
-
-        for _, c in ipairs(body:GetChildren()) do
-            if c:IsA("TextLabel") then c:Destroy() end
-        end
+        local data, err = GET("/panel/" .. guild.guild_id)
+        sk1:Destroy(); sk2:Destroy(); sk3:Destroy(); sk4:Destroy()
 
         if err then
-            lbl(body, "❌ " .. err, 13, C.red, false, Enum.TextXAlignment.Center).LayoutOrder = 1
+            local ef = Instance.new("Frame")
+            ef.BackgroundColor3 = Color3.fromRGB(40, 14, 14)
+            ef.Size = UDim2.new(1, 0, 0, 0)
+            ef.AutomaticSize = Enum.AutomaticSize.Y
+            ef.LayoutOrder = 1
+            ef.Parent = body
+            corner(ef, 8)
+            pad(ef, 12)
+            stroke(ef, C.red, 1)
+            lbl(ef, "⚠️  " .. err, 13, C.red, false, Enum.TextXAlignment.Center)
+            mkSmallBtn(body, "🔄  Retry", C.cardAlt, C.accent, function()
+                openMainPanel(guild)
+            end, 2)
             return
         end
 
-        if not data.registered then
-            notRegisteredCard(body, data.message or "Account not found.", 1)
-            return
-        end
-
+        State.panel_data = data
         local P = data.profile
-        identityHeader(body, P, 1)
-        sectionHead(body, "📦 YOUR ORDERS", C.muted, 3)
+        local isAdmin = P.designation == "AVA Admin"
+            or P.designation == "Server Owner"
+            or P.designation == "Developer & Owner"
 
-        local srow = Instance.new("Frame"); srow.BackgroundTransparency = 1
-        srow.Size = UDim2.new(1,0,0,72); srow.LayoutOrder = 4; srow.Parent = body; hlist(srow,8)
+        identCard(body, P, 1)
 
-        local function osc(val, label, col)
-            local c = Instance.new("Frame"); c.BackgroundColor3 = C.card
-            c.Size = UDim2.new(0.48,0,1,0); corner(c,10); stroke(c,col,1); c.Parent = srow
-            local vl = Instance.new("TextLabel"); vl.Text = tostring(val or 0); vl.TextSize = 24
-            vl.Font = Enum.Font.GothamBold; vl.TextColor3 = col; vl.BackgroundTransparency = 1
-            vl.Size = UDim2.new(1,0,0,35); vl.Position = UDim2.new(0,0,0,6); vl.TextXAlignment = Enum.TextXAlignment.Center; vl.Parent = c
-            local nl = Instance.new("TextLabel"); nl.Text = label; nl.TextSize = 10
-            nl.Font = Enum.Font.Gotham; nl.TextColor3 = C.muted; nl.BackgroundTransparency = 1
-            nl.Size = UDim2.new(1,0,0,16); nl.Position = UDim2.new(0,0,0,42); nl.TextXAlignment = Enum.TextXAlignment.Center; nl.Parent = c
+        -- ── CLIENT VIEW ──────────────────────────────────────────
+        if data.view == "client" then
+            local orders = data.orders
+            secHead(body, "📦  YOUR ORDERS", C.muted, 3)
+
+            local srow = Instance.new("Frame")
+            srow.BackgroundTransparency = 1
+            srow.Size = UDim2.new(1, 0, 0, 72)
+            srow.LayoutOrder = 4
+            srow.Parent = body
+            hlist(srow, 8)
+
+            local function osc(val, lbl_t, col)
+                local c = Instance.new("Frame")
+                c.BackgroundColor3 = C.card
+                c.Size = UDim2.new(0.48, 0, 1, 0)
+                corner(c, 10)
+                stroke(c, col, 1)
+                c.Parent = srow
+                local vl = Instance.new("TextLabel")
+                vl.Text = tostring(val)
+                vl.TextSize = 24
+                vl.Font = Enum.Font.GothamBold
+                vl.TextColor3 = col
+                vl.BackgroundTransparency = 1
+                vl.Size = UDim2.new(1, 0, 0, 36)
+                vl.Position = UDim2.new(0, 0, 0, 6)
+                vl.TextXAlignment = Enum.TextXAlignment.Center
+                vl.Parent = c
+                local nl = Instance.new("TextLabel")
+                nl.Text = lbl_t
+                nl.TextSize = 9
+                nl.Font = Enum.Font.GothamBold
+                nl.TextColor3 = C.muted
+                nl.BackgroundTransparency = 1
+                nl.Size = UDim2.new(1, 0, 0, 14)
+                nl.Position = UDim2.new(0, 0, 0, 44)
+                nl.TextXAlignment = Enum.TextXAlignment.Center
+                nl.Parent = c
+            end
+            osc(orders.total_active   or 0, "ACTIVE",    C.yellow)
+            osc(orders.total_finished or 0, "COMPLETED", C.accent)
+
+            if orders.active and #orders.active > 0 then
+                secHead(body, "🛒  ACTIVE SERVICES", C.yellow, 10)
+                for i, svc in ipairs(orders.active) do
+                    orderCard(body, svc, 10 + i)
+                end
+            else
+                lbl(body, "✅  No active orders right now.", 14, C.muted, false, Enum.TextXAlignment.Center, 11)
+            end
+
+        -- ── STAFF VIEW ───────────────────────────────────────────
+        else
+            local S = data.summary
+            local T = data.tasks
+
+            secHead(body, "📊  YOUR TASKS", C.muted, 3)
+            statRow(body, S, 4)
+
+            local lo = 10
+
+            local function handleAction(action, otp, gid)
+                local path = "/panel/" .. gid .. "/" .. action
+                task.spawn(function()
+                    local r, e = POST(path, {otp = otp})
+                    if e then
+                        toast("❌  " .. e, true)
+                    elseif r and not r.success then
+                        toast("⚠️  " .. (r.message or "Error"), true)
+                    else
+                        toast("✅  " .. otp .. " " .. action .. "d!", false)
+                        task.delay(0.4, function() openMainPanel(guild) end)
+                    end
+                end)
+            end
+
+            if T.pending and #T.pending > 0 then
+                secHead(body, "⏳  PENDING  (" .. #T.pending .. ")", C.yellow, lo); lo = lo + 1
+                for _, t in ipairs(T.pending) do
+                    taskCard(body, t, lo, handleAction, guild.guild_id, isAdmin)
+                    lo = lo + 1
+                    if isAdmin then
+                        local capturedOTP = t.otp
+                        mkSmallBtn(body, "🌐  Assign Cross-Server", C.cardAlt, C.purple,
+                            function()
+                                openAssignPanel(capturedOTP, guild.guild_id, function()
+                                    openMainPanel(guild)
+                                end)
+                            end, lo)
+                        lo = lo + 1
+                    end
+                end
+            end
+
+            if T.started and #T.started > 0 then
+                secHead(body, "▶️  IN PROGRESS  (" .. #T.started .. ")", C.blue, lo); lo = lo + 1
+                for _, t in ipairs(T.started) do
+                    taskCard(body, t, lo, handleAction, guild.guild_id, isAdmin)
+                    lo = lo + 1
+                end
+            end
+
+            if T.finished and #T.finished > 0 then
+                secHead(body, "✅  RECENTLY FINISHED", C.accent, lo); lo = lo + 1
+                for _, t in ipairs(T.finished) do
+                    taskCard(body, t, lo, function() end, guild.guild_id, false)
+                    lo = lo + 1
+                end
+            end
+
+            if S.total == 0 then
+                lbl(body, "🎉  No tasks assigned to you.", 14, C.muted, false, Enum.TextXAlignment.Center, lo)
+                lo = lo + 1
+            end
+
+            -- FIX #6: store the button reference, apply stroke directly to it
+            local refreshBtn = mkBtn(body, "🔄   Refresh", C.cardAlt, C.accent,
+                function() openMainPanel(guild) end, 997)
+            stroke(refreshBtn, C.accent, 1)
         end
 
-        osc(data.total_active or 0, "ACTIVE", C.yellow)
-        osc(data.total_finished or 0, "COMPLETED", C.accent)
+        -- Logout button
+        mkBtn(body, "🚪   Log Out", C.cardAlt, C.red, function()
+            task.spawn(function() POST("/auth/logout", {}) end)
+            clearSession()
+            kill("AVA_MainPanel")
+            kill("AVA_Running")  -- FIX #8: also clean up flag on logout
+            toast("Logged out of AVA.", false)
+        end, 1000)
+    end)
+end
 
-        if # (data.active_services or {}) > 0 then
-            sectionHead(body, "🛒 ACTIVE SERVICES", C.yellow, 10)
-            for i, svc in ipairs(data.active_services) do
-                orderRow(body, svc, 10 + i)
-            end
+-- ════════════════════════════════════════════════════════
+--  PAGE 2: GUILD SELECTOR
+-- ════════════════════════════════════════════════════════
+local function openGuildSelector()
+    kill("AVA_GuildSelect")
+    local sg = makeScreen("AVA_GuildSelect")
+    -- FIX #5: onClose destroys sg so the window can actually be closed
+    local _, body = scrollWindow(sg, 460, 520,
+        "📡  Select Server",
+        "You're registered in " .. #State.guilds .. " server(s)",
+        function()
+            kill("AVA_GuildSelect")
+            kill("AVA_Running")  -- FIX #8: clean up flag if user closes selector
+        end)
+
+    secHead(body, "CHOOSE A SERVER", C.muted, 1)
+
+    for i, guild in ipairs(State.guilds) do
+        local card = Instance.new("TextButton")
+        card.BackgroundColor3 = C.card
+        card.Size = UDim2.new(1, 0, 0, 0)
+        card.AutomaticSize = Enum.AutomaticSize.Y
+        card.LayoutOrder = 10 + i
+        card.Text = ""
+        card.AutoButtonColor = false
+        corner(card, 10)
+        card.Parent = body
+        pad(card, 14, 12)
+
+        local inner = Instance.new("Frame")
+        inner.BackgroundTransparency = 1
+        inner.Size = UDim2.new(1, 0, 0, 0)
+        inner.AutomaticSize = Enum.AutomaticSize.Y
+        inner.Parent = card
+        vlist(inner, 4)
+
+        lbl(inner, guild.server_name or guild.guild_name or "Server", 16, C.text, true, nil, 1)
+        if guild.guild_name and guild.guild_name ~= "" and guild.guild_name ~= guild.server_name then
+            lbl(inner, "📡  " .. guild.guild_name, 10, C.muted, false, nil, 2)
+        end
+        local dc = DESIG_C[guild.designation] or C.blue
+        lbl(inner, guild.designation or "Staff", 11, dc, true, nil, 3)
+
+        card.MouseEnter:Connect(function()
+            TweenService:Create(card, TweenInfo.new(0.1),
+                {BackgroundColor3 = Color3.fromRGB(28, 33, 44)}):Play()
+        end)
+        card.MouseLeave:Connect(function()
+            TweenService:Create(card, TweenInfo.new(0.1),
+                {BackgroundColor3 = C.card}):Play()
+        end)
+        card.MouseButton1Click:Connect(function()
+            kill("AVA_GuildSelect")
+            openMainPanel(guild)
+        end)
+    end
+end
+
+-- ════════════════════════════════════════════════════════
+--  PAGE 1: LOGIN
+-- ════════════════════════════════════════════════════════
+local function openLoginPage()
+    kill("AVA_Login")
+    local sg = makeScreen("AVA_Login")
+
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.new(1, 0, 1, 0)
+    bg.BackgroundColor3 = C.bg
+    bg.Parent = sg
+
+    local card = Instance.new("Frame")
+    card.Size = UDim2.new(0, 440, 0, 0)
+    card.AutomaticSize = Enum.AutomaticSize.Y
+    card.Position = UDim2.new(0.5, -220, 0.6, -200)
+    card.BackgroundColor3 = C.panel
+    card.BackgroundTransparency = 1
+    card.Parent = sg
+    corner(card, 18)
+    stroke(card, C.border, 1.5)
+    pad(card, 30, 28)
+
+    local inner = Instance.new("Frame")
+    inner.BackgroundTransparency = 1
+    inner.Size = UDim2.new(1, 0, 0, 0)
+    inner.AutomaticSize = Enum.AutomaticSize.Y
+    inner.Parent = card
+    vlist(inner, 14)
+
+    local logo = Instance.new("TextLabel")
+    logo.Text = "🛡️"
+    logo.TextSize = 52
+    logo.Font = Enum.Font.GothamBold
+    logo.TextColor3 = C.accent
+    logo.BackgroundTransparency = 1
+    logo.Size = UDim2.new(1, 0, 0, 64)
+    logo.TextXAlignment = Enum.TextXAlignment.Center
+    logo.LayoutOrder = 1
+    logo.Parent = inner
+
+    lbl(inner, "AVA — Atom Vanguard Array", 20, C.text, true, Enum.TextXAlignment.Center, 2)
+    lbl(inner, "Enter your Discord ID and panel password.", 12, C.muted, false, Enum.TextXAlignment.Center, 3)
+
+    divider(inner, 4)
+
+    -- Discord ID field
+    lbl(inner, "Discord ID", 11, C.muted, true, nil, 5)
+    local idFrame = Instance.new("Frame")
+    idFrame.BackgroundColor3 = C.input_bg
+    idFrame.Size = UDim2.new(1, 0, 0, 46)
+    idFrame.LayoutOrder = 6
+    idFrame.Parent = inner
+    corner(idFrame, 10)
+    stroke(idFrame, C.border, 1)
+    local idBox = Instance.new("TextBox")
+    idBox.PlaceholderText = "e.g. 1155023196907647006"
+    idBox.PlaceholderColor3 = C.muted
+    idBox.TextColor3 = C.text
+    idBox.Font = Enum.Font.Gotham
+    idBox.TextSize = 14
+    idBox.BackgroundTransparency = 1
+    idBox.Size = UDim2.new(1, -16, 1, 0)
+    idBox.Position = UDim2.new(0, 8, 0, 0)
+    idBox.TextXAlignment = Enum.TextXAlignment.Left
+    idBox.ClearTextOnFocus = false
+    idBox.Parent = idFrame
+    idBox.Focused:Connect(function()
+        TweenService:Create(idFrame, TweenInfo.new(0.12),
+            {BackgroundColor3 = Color3.fromRGB(30, 35, 48)}):Play()
+        for _, s in ipairs(idFrame:GetChildren()) do
+            if s:IsA("UIStroke") then s.Color = C.accent end
+        end
+    end)
+    idBox.FocusLost:Connect(function()
+        TweenService:Create(idFrame, TweenInfo.new(0.12),
+            {BackgroundColor3 = C.input_bg}):Play()
+        for _, s in ipairs(idFrame:GetChildren()) do
+            if s:IsA("UIStroke") then s.Color = C.border end
+        end
+    end)
+
+    -- Password field
+    -- FIX #3 & #4: real show/hide masking using a dot-overlay label
+    -- The TextBox always holds the real text (needed for submission).
+    -- A covering TextLabel shows "●●●●" when masked; hidden when revealed.
+    lbl(inner, "Panel Password", 11, C.muted, true, nil, 7)
+    local pwFrame = Instance.new("Frame")
+    pwFrame.BackgroundColor3 = C.input_bg
+    pwFrame.Size = UDim2.new(1, 0, 0, 46)
+    pwFrame.LayoutOrder = 8
+    pwFrame.Parent = inner
+    corner(pwFrame, 10)
+    stroke(pwFrame, C.border, 1)
+
+    -- Real (invisible) TextBox captures keystrokes
+    local pwBox = Instance.new("TextBox")
+    pwBox.PlaceholderText = "Password set via >setpanelpass"
+    pwBox.PlaceholderColor3 = C.muted
+    pwBox.TextColor3 = Color3.fromRGB(0, 0, 0, 0)  -- fully transparent text
+    pwBox.TextTransparency = 1                        -- hide real text
+    pwBox.Font = Enum.Font.Gotham
+    pwBox.TextSize = 14
+    pwBox.BackgroundTransparency = 1
+    pwBox.Size = UDim2.new(1, -52, 1, 0)
+    pwBox.Position = UDim2.new(0, 8, 0, 0)
+    pwBox.TextXAlignment = Enum.TextXAlignment.Left
+    pwBox.ClearTextOnFocus = false
+    pwBox.ZIndex = 3
+    pwBox.Parent = pwFrame
+
+    -- Dot-mask overlay label (shown when password is hidden)
+    local maskLbl = Instance.new("TextLabel")
+    maskLbl.BackgroundTransparency = 1
+    maskLbl.Size = UDim2.new(1, -52, 1, 0)
+    maskLbl.Position = UDim2.new(0, 8, 0, 0)
+    maskLbl.TextXAlignment = Enum.TextXAlignment.Left
+    maskLbl.TextColor3 = C.text
+    maskLbl.Font = Enum.Font.GothamBold
+    maskLbl.TextSize = 18   -- slightly larger so dots look natural
+    maskLbl.Text = ""
+    maskLbl.ZIndex = 2
+    maskLbl.Parent = pwFrame
+
+    -- Placeholder label (shown when pwBox is empty AND masked)
+    local pwPlaceholder = Instance.new("TextLabel")
+    pwPlaceholder.BackgroundTransparency = 1
+    pwPlaceholder.Size = UDim2.new(1, -52, 1, 0)
+    pwPlaceholder.Position = UDim2.new(0, 8, 0, 0)
+    pwPlaceholder.TextXAlignment = Enum.TextXAlignment.Left
+    pwPlaceholder.TextColor3 = C.muted
+    pwPlaceholder.Font = Enum.Font.Gotham
+    pwPlaceholder.TextSize = 14
+    pwPlaceholder.Text = "Password set via >setpanelpass"
+    pwPlaceholder.ZIndex = 1
+    pwPlaceholder.Parent = pwFrame
+
+    local pwVisible = false
+
+    -- Keep mask/placeholder in sync as user types
+    local function syncMask()
+        local raw = pwBox.Text
+        if raw == "" then
+            maskLbl.Text = ""
+            pwPlaceholder.Visible = not pwVisible
         else
-            lbl(body, "✅ No active orders right now!", 14, C.muted, false, Enum.TextXAlignment.Center).LayoutOrder = 11
+            pwPlaceholder.Visible = false
+            if pwVisible then
+                maskLbl.Text = raw
+                maskLbl.Font = Enum.Font.Gotham
+                maskLbl.TextSize = 14
+                maskLbl.TextColor3 = C.text
+            else
+                maskLbl.Text = string.rep("●", #raw)
+                maskLbl.Font = Enum.Font.GothamBold
+                maskLbl.TextSize = 18
+                maskLbl.TextColor3 = C.text
+            end
+        end
+    end
+
+    pwBox:GetPropertyChangedSignal("Text"):Connect(syncMask)
+
+    -- Show/Hide toggle (eye button)
+    local eyeBtn = Instance.new("TextButton")
+    eyeBtn.Text = "👁"
+    eyeBtn.TextSize = 16
+    eyeBtn.Font = Enum.Font.Gotham
+    eyeBtn.TextColor3 = C.muted
+    eyeBtn.BackgroundTransparency = 1
+    eyeBtn.Size = UDim2.new(0, 40, 1, 0)
+    eyeBtn.Position = UDim2.new(1, -44, 0, 0)
+    eyeBtn.ZIndex = 4
+    eyeBtn.Parent = pwFrame
+    eyeBtn.MouseButton1Click:Connect(function()
+        pwVisible = not pwVisible
+        eyeBtn.TextColor3 = pwVisible and C.accent or C.muted
+        syncMask()
+    end)
+
+    pwBox.Focused:Connect(function()
+        TweenService:Create(pwFrame, TweenInfo.new(0.12),
+            {BackgroundColor3 = Color3.fromRGB(30, 35, 48)}):Play()
+        for _, s in ipairs(pwFrame:GetChildren()) do
+            if s:IsA("UIStroke") then s.Color = C.accent end
+        end
+    end)
+    pwBox.FocusLost:Connect(function()
+        TweenService:Create(pwFrame, TweenInfo.new(0.12),
+            {BackgroundColor3 = C.input_bg}):Play()
+        for _, s in ipairs(pwFrame:GetChildren()) do
+            if s:IsA("UIStroke") then s.Color = C.border end
+        end
+    end)
+
+    -- Error label
+    local errLbl = Instance.new("TextLabel")
+    errLbl.Text = ""
+    errLbl.TextSize = 12
+    errLbl.Font = Enum.Font.Gotham
+    errLbl.TextColor3 = C.red
+    errLbl.BackgroundTransparency = 1
+    errLbl.Size = UDim2.new(1, 0, 0, 0)
+    errLbl.AutomaticSize = Enum.AutomaticSize.Y
+    errLbl.TextXAlignment = Enum.TextXAlignment.Center
+    errLbl.TextWrapped = true
+    errLbl.Visible = false
+    errLbl.LayoutOrder = 9
+    errLbl.Parent = inner
+
+    local function setErr(msg)
+        errLbl.Text = "⚠️  " .. msg
+        errLbl.Visible = true
+        TweenService:Create(errLbl, TweenInfo.new(0.1), {TextColor3 = C.red}):Play()
+        local ox = card.Position
+        for _, dx in ipairs({-4, 4, -3, 3, -1, 1, 0}) do
+            task.wait(0.04)
+            card.Position = UDim2.new(ox.X.Scale, ox.X.Offset + dx, ox.Y.Scale, ox.Y.Offset)
+        end
+        card.Position = ox
+    end
+
+    local function clearErr()
+        errLbl.Visible = false
+    end
+
+    -- Login button
+    local loginBtn = mkBtn(inner, "🔓   Log In", C.accent, C.black, function()
+        local discStr  = idBox.Text:gsub("%s", "")
+        local password = pwBox.Text   -- read real text from the invisible TextBox
+
+        clearErr()
+
+        if discStr == ""          then setErr("Please enter your Discord ID.");            return end
+        if not tonumber(discStr)  then setErr("Discord ID must be a number — no letters."); return end
+        if #discStr < 15          then setErr("Discord ID looks too short. Check again."); return end
+        if password == ""         then setErr("Please enter your panel password.");         return end
+        if #password < 4          then setErr("Password must be at least 4 characters.");   return end
+
+        loginBtn.Text = "⏳  Logging in..."
+        loginBtn.BackgroundColor3 = C.muted
+        loginBtn.Active = false
+
+        task.spawn(function()
+            local data, err = POST("/auth/login", {
+                discord_id = tonumber(discStr),
+                password   = password,
+            })
+
+            loginBtn.Text = "🔓   Log In"
+            loginBtn.BackgroundColor3 = C.accent
+            loginBtn.Active = true
+
+            if err then
+                local friendly = err
+                if err:find("not found") then
+                    friendly = "Discord ID not found. Use >setpanelpass in Discord first."
+                elseif err:find("Incorrect") or err:find("password") then
+                    friendly = "Wrong password. Try again or reset with >setpanelpass."
+                elseif err:find("Too many") then
+                    friendly = err
+                elseif err:find("outdated") then
+                    friendly = "Password outdated — run >setpanelpass in Discord to reset."
+                end
+                setErr(friendly)
+                return
+            end
+
+            State.token           = data.token
+            State.primary_profile = data.primary_profile
+            State.guilds          = data.guilds
+
+            saveSession(data.token, tonumber(discStr))
+
+            toast("✅  " .. (data.message or "Logged in!"), false)
+            kill("AVA_Login")
+
+            task.delay(0.3, function()
+                if #State.guilds == 1 then
+                    openMainPanel(State.guilds[1])
+                else
+                    openGuildSelector()
+                end
+            end)
+        end)
+    end, 10)
+
+    lbl(inner, "Don't have a password? Use >setpanelpass in your Discord server.",
+        11, C.muted, false, Enum.TextXAlignment.Center, 11)
+
+    TweenService:Create(card,
+        TweenInfo.new(0.28, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
+        {Position = UDim2.new(0.5, -220, 0.5, -200), BackgroundTransparency = 0}):Play()
+end
+
+-- ════════════════════════════════════════════════════════
+--  PAGE 0: INTRO VIDEO
+-- ════════════════════════════════════════════════════════
+local function playIntroVideo()
+    kill("AVA_Intro")
+    local sg = makeScreen("AVA_Intro")
+
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.new(1, 0, 1, 0)
+    bg.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    bg.Parent = sg
+
+    local skipLbl = Instance.new("TextLabel")
+    skipLbl.Text = "Press [ESC] to skip intro"
+    skipLbl.TextSize = 11
+    skipLbl.Font = Enum.Font.Gotham
+    skipLbl.TextColor3 = C.muted
+    skipLbl.BackgroundTransparency = 1
+    skipLbl.Size = UDim2.new(0, 200, 0, 22)
+    skipLbl.Position = UDim2.new(1, -208, 1, -30)
+    skipLbl.TextXAlignment = Enum.TextXAlignment.Right
+    skipLbl.Parent = sg
+
+    local played = false
+    local function afterVideo()
+        if played then return end
+        played = true
+        TweenService:Create(bg, TweenInfo.new(0.4), {BackgroundTransparency = 1}):Play()
+        task.delay(0.45, function()
+            kill("AVA_Intro")
+            openLoginPage()
+        end)
+    end
+
+    local vf = Instance.new("VideoFrame")
+    vf.Size = UDim2.new(1, 0, 1, 0)
+    vf.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    vf.Video = INTRO_VIDEO_ID
+    vf.Looped = false
+    vf.Volume = 0.8
+    vf.Parent = sg
+    vf.Ended:Connect(afterVideo)
+
+    -- FIX #2: call Play() directly — VideoFrame loads and plays without IsLoaded guard
+    task.spawn(function()
+        task.wait(0.5)
+        vf:Play()
+    end)
+
+    -- FIX #1: fallback timer raised from 3s to 15s to allow video time to load
+    task.delay(15, function() if not played then afterVideo() end end)
+    -- Absolute max cap (unchanged)
+    task.delay(60, afterVideo)
+
+    local conn
+    conn = UserInputService.InputBegan:Connect(function(input, gpe)
+        if not gpe and input.KeyCode == Enum.KeyCode.Escape then
+            conn:Disconnect()
+            afterVideo()
         end
     end)
 end
 
--- ═══════════════════════════════════════════════════════
--- CHAT COMMANDS
--- ═══════════════════════════════════════════════════════
-player.Chatted:Connect(function(msg)
-    local m = msg:lower():match("^%s*(.-)%s*$")
-    if m == "/ava" then openStaffPanel()
-    elseif m == "/order" then openOrderPanel()
-    elseif m == "/ava help" then toast("💬 /ava = staff panel | /order = client orders", false)
-    end
+-- ════════════════════════════════════════════════════════
+--  ENTRY POINT
+-- ════════════════════════════════════════════════════════
+if pgui:FindFirstChild("AVA_Running") then
+    toast("AVA panel is already open.", false)
+    return
+end
+
+-- FIX #8: track the flag so close handlers can destroy it
+local flag = Instance.new("BoolValue")
+flag.Name = "AVA_Running"
+flag.Parent = pgui
+-- Clean up on character removal (respawn) automatically
+game:GetService("Players").LocalPlayer.CharacterRemoving:Connect(function()
+    flag:Destroy()
 end)
 
-task.delay(4, function()
-    toast("💬 Type /ava (staff) or /order (clients) to open AVA", false)
-end)
+-- Try to restore session from attributes (survives respawn)
+local savedToken, savedDiscId = loadSession()
+if savedToken then
+    State.token = savedToken
+    task.spawn(function()
+        local data, err = GET("/auth/me")
+        if err then
+            clearSession()
+            playIntroVideo()
+        else
+            State.primary_profile = data.primary_profile
+            State.guilds          = data.guilds
+            toast("✅  Session restored — welcome back!", false)
+            if #State.guilds == 1 then
+                openMainPanel(State.guilds[1])
+            else
+                openGuildSelector()
+            end
+        end
+    end)
+else
+    playIntroVideo()
+end
